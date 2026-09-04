@@ -58,19 +58,41 @@
       "runtime": { "bin": "{install_dir}/Ollama.app/Contents/Resources/ollama" }
     },
     "linux/amd64": {
-      "detect": ["{install_dir}/bin/ollama"],
+      "detect": [
+        "/usr/local/bin/ollama",
+        "/usr/bin/ollama",
+        "{install_dir}/bin/ollama"
+      ],
       "install": {
         "fetch": { "url": "https://ollama.com/download/ollama-linux-amd64.tar.zst" },
-        "run": ["tar", "--zstd", "-xf", "{download}", "-C", "{install_dir}"]
+        "run": [
+          "sh",
+          "-c",
+          "tar --zstd -xf \"$1\" -C \"$2\" && if [ -e /dev/kfd ] || [ -d /sys/module/amdgpu ] || lspci | grep -qiE 'amd|radeon|1002:'; then curl -fsSL https://ollama.com/download/ollama-linux-amd64-rocm.tar.zst | tar --zstd -xf - -C \"$2\"; fi",
+          "_",
+          "{download}",
+          "{install_dir}"
+        ]
       },
       "uninstall": { "run": ["rm", "-rf", "{install_dir}"] },
       "runtime": {
         "bin": "{install_dir}/bin/ollama",
-        "env": { "LD_LIBRARY_PATH": "{install_dir}/lib/ollama" }
+        "env": {
+          "LD_LIBRARY_PATH": "{install_dir}/lib/ollama:{install_dir}/lib/ollama/rocm_v7_2:/usr/local/lib/ollama:/usr/local/lib/ollama/rocm_v7_2:/opt/rocm/lib",
+          "OLLAMA_IGPU_ENABLE": "1",
+          "HSA_OVERRIDE_GFX_VERSION": "11.5.1",
+          "HSA_ENABLE_SDMA": "0",
+          "ROCBLAS_USE_HIPBLASLT": "1",
+          "OLLAMA_FLASH_ATTENTION": "1"
+        }
       }
     },
     "linux/arm64": {
-      "detect": ["{install_dir}/bin/ollama"],
+      "detect": [
+        "/usr/local/bin/ollama",
+        "/usr/bin/ollama",
+        "{install_dir}/bin/ollama"
+      ],
       "install": {
         "fetch": { "url": "https://ollama.com/download/ollama-linux-arm64.tar.zst" },
         "run": ["tar", "--zstd", "-xf", "{download}", "-C", "{install_dir}"]
@@ -78,7 +100,7 @@
       "uninstall": { "run": ["rm", "-rf", "{install_dir}"] },
       "runtime": {
         "bin": "{install_dir}/bin/ollama",
-        "env": { "LD_LIBRARY_PATH": "{install_dir}/lib/ollama" }
+        "env": { "LD_LIBRARY_PATH": "{install_dir}/lib/ollama:/usr/local/lib/ollama" }
       }
     }
   },
