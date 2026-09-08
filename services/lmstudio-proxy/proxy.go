@@ -390,10 +390,12 @@ type Proxy struct {
 	// from 1 — without it, two concurrent cross-engine jobs, or a reused id
 	// after a restart, would collide in the broker's store.
 	runID string
+
+	concurrencyGate *concurrencyGate
 }
 
 func NewProxy(codec *Codec, discovery *Discovery, port int) *Proxy {
-	return &Proxy{
+	p := &Proxy{
 		codec:     codec,
 		discovery: discovery,
 		port:      port,
@@ -401,6 +403,8 @@ func NewProxy(codec *Codec, discovery *Discovery, port int) *Proxy {
 		runID:     newRunID(),
 		activity:  nodeactivity.NewReporter(activityReportInterval),
 	}
+	p.concurrencyGate = newConcurrencyGate(p)
+	return p
 }
 
 // activityReportInterval is how often a single node's streaming may raise a
@@ -954,6 +958,14 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	candidates := p.resolveCandidates(routingModel)
 	if isInf && model != "" {
 		candidates = p.reserveCandidate(candidates)
+		if p.concurrencyGate.enabled() && len(candidates) > 0 {
+			available := p.concurrencyGate.filterIdleCandidates(candidates)
+			if len(available) == 0 {
+				p.concurrencyGate.writeOverloadedResponse(w, r, reqID, model, start)
+				return
+			}
+			candidates = available
+		}
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
 		if len(candidates) > 0 {
@@ -1122,6 +1134,12 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// failover). The self-forward guard lives in resolveCandidates.
 	for i := range candidates {
 		cand := candidates[i]
+		candRelease := p.concurrencyGate.acquire(cand.id)
+		defer func() {
+			if candRelease != nil {
+				candRelease()
+			}
+		}()
 		last := i == len(candidates)-1
 		if bodyBytes != nil {
 			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
@@ -1250,11 +1268,16 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		proxy.ServeHTTP(sc, r)
-		if !retry {
-			finalStatus = sc.status
-			committedSC = sc
-			break
+		if retry {
+			if candRelease != nil {
+				candRelease()
+				candRelease = nil
+			}
+			continue
 		}
+		finalStatus = sc.status
+		committedSC = sc
+		break
 	}
 
 	slog.Debug("proxy request complete",

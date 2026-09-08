@@ -23,6 +23,7 @@ func main() {
 	ignorePersistedPort := flag.Bool("ignore-persisted-port", false, "use --port even when a persisted port exists")
 	ipcPath := flag.String("ipc", "", "IPC endpoint: Unix domain socket path or Windows named pipe (default: stdin/stdout)")
 	clusterDir := flag.String("cluster-dir", "", "cluster trust directory (node.crt/key + trusted pins); enables the LAN mTLS inference ingress when this node is clustered")
+	maxNodeConcurrency := flag.Int("max-node-concurrency", 0, "maximum concurrent inference requests per node (0 disables; or set NVPAIR_MAX_NODE_CONCURRENCY)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	resolveLevel := applog.RegisterFlag(nil, slog.LevelInfo)
 	flag.Parse()
@@ -73,6 +74,7 @@ func main() {
 	codec := NewCodec(transport)
 	disc := NewDiscovery()
 	proxy := NewProxy(codec, disc, effectivePort)
+	proxy.SetMaxNodeConcurrency(resolveMaxNodeConcurrency(*maxNodeConcurrency))
 	// Open a live view of this node's cluster mTLS trust fabric. While unclustered
 	// the proxy serves only the loopback plaintext personality; once this node is
 	// a member the same listener also serves the pin-gated LAN mTLS ingress, and
