@@ -1,0 +1,3 @@
+# Build artifacts are large (~145 MB) and reproducible via 20_build_darwin_arm64.sh.
+# Do not commit them; they are transferred out-of-band with scp.
+dist/
