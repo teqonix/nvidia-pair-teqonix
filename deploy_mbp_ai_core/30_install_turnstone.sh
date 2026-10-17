@@ -33,9 +33,14 @@ FACADE_PORT=1234
 
 # ---------------------------------------------------------------------------
 log "0. verify artifact against SHA256SUMS"
-( cd "$SRC/cli-bin" && shasum -a 256 -c "$SRC/SHA256SUMS" >/dev/null 2>&1 ) \
-  && log "   checksums OK" \
-  || warn "checksum verification failed or SHA256SUMS missing - continuing, verify manually"
+# NOTE: `< /dev/null` is mandatory. `shasum -c` treats a "-" path entry as
+# read-from-stdin; when this script is piped via `bash -s`, shasum would consume
+# the REST OF THIS SCRIPT as data. (That bug truncated a real run at step 0.)
+if ( cd "$SRC/cli-bin" && shasum -a 256 -c "$SRC/SHA256SUMS" >/dev/null 2>&1 < /dev/null ); then
+  log "   checksums OK"
+else
+  die "checksum verification failed against $SRC/SHA256SUMS - refusing to install"
+fi
 
 # ---------------------------------------------------------------------------
 log "1. install binaries -> $DEST/cli-bin (directory-inode-preserving swap)"

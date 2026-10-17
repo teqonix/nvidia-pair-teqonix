@@ -97,14 +97,14 @@ log "2/7 gemma-4-26b-a4b"
 download "unsloth/gemma-4-26B-A4B-it-GGUF" "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf" "gemma-4-26b-a4b" || FAIL=1
 
 log "3/7 qwen-3.8-27b"
-download "unsloth/Qwen3.8-27B-GGUF" "Qwen3.8-27B-Q4_K_M.gguf" "qwen-3.8-27b" || FAIL=1
+download "unsloth/Qwen3.8-27B-GGUF" "Qwen3.8-27B-UD-Q4_K_M.gguf" "qwen-3.8-27b" || FAIL=1
 
 log "4/7 nemotron-3.5-lightning-30b-a3b"
 download "lmstudio-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF" \
          "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_K_M.gguf" "nemotron-lightning" || FAIL=1
 
-log "5/7 gpt-oss-120b"
-download "ggml-org/gpt-oss-120b-GGUF" "gpt-oss-120b-Q4_K_M.gguf" "gpt-oss-120b" || FAIL=1
+log "5/7 gpt-oss-120b  (native MXFP4 - the repo has no Q4_K_M; 63.4 GB)"
+download "ggml-org/gpt-oss-120b-GGUF" "gpt-oss-120b-MXFP4.gguf" "gpt-oss-120b" || FAIL=1
 
 log "6/7 reuse the one real GGUF already on disk (nemotron-3-nano-4b)"
 SRC_GGUF="/Users/teqonix/.lmstudio/models/lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf"

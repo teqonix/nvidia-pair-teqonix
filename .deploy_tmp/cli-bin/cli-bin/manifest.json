@@ -1,0 +1,90 @@
+{
+  "source": "services-build",
+  "sourceFingerprint": "e1e0342350112050a5b7e261ebf8287416b3e1c3203a5b5fdef737e0792ebc36",
+  "product": "1.0.0",
+  "platform": "linux",
+  "arch": "x64",
+  "components": {
+    "nvpair-proxy": "1.4.0",
+    "nvpair-node-info": "0.13.4",
+    "nvpair-node-scanner": "0.20.5",
+    "nvpair-manual-nodes": "0.11.2",
+    "nvpair-workload-manager": "0.15.0",
+    "nvpair-errors": "0.7.5",
+    "nvpair-node-settings": "1.0.5",
+    "nvpair-ui-broker": "1.3.1",
+    "nvpair-engine-manager": "0.21.2",
+    "nvpair-cluster-manager": "1.1.6",
+    "nvpair-job-scheduler": "0.5.0",
+    "nvpair-tui": "1.0.3",
+    "inference-dispatcher": "2.1.2"
+  },
+  "files": [
+    {
+      "fileName": "inference-dispatcher",
+      "size": 8853726,
+      "sha256": "7979db36cd8b4d02efe7a5574edbdf00397d1b9c67be5a1a82c11bb5f0e8d85b"
+    },
+    {
+      "fileName": "nvpair-cluster-manager",
+      "size": 11658004,
+      "sha256": "ed5c28eb2aaaf99effd48cb56d65e94dc5eed917c1eacc88c837fbb59edec349"
+    },
+    {
+      "fileName": "nvpair-engine-manager",
+      "size": 15287699,
+      "sha256": "bd7f1463f6109c9e8b46cc47b77f0a2f1005693e75a0eb85ef00e5b19ff6f703"
+    },
+    {
+      "fileName": "nvpair-errors",
+      "size": 10573505,
+      "sha256": "a8ef06a8bc379ac637ae320529295a45032ebee2837281cd84a82da01642e967"
+    },
+    {
+      "fileName": "nvpair-job-scheduler",
+      "size": 4196264,
+      "sha256": "169f8d5800e3dacb051a8c7ff9e5f607c7139ba3816921ffb825f85ff0736710"
+    },
+    {
+      "fileName": "nvpair-manual-nodes",
+      "size": 9224411,
+      "sha256": "4478373a25565c5f1d6db5673f8886f6affd98ffc6c794a36c307207b273d254"
+    },
+    {
+      "fileName": "nvpair-node-info",
+      "size": 10901860,
+      "sha256": "eec106e09b9c1abe9861694d4ebdc654a5bb4cefecff0ddd0cf60c4e6de8c41e"
+    },
+    {
+      "fileName": "nvpair-node-scanner",
+      "size": 10743354,
+      "sha256": "475aff4f5e87021533a323f080aeee4bc79daf7e61e26e6dd4755e136a832df6"
+    },
+    {
+      "fileName": "nvpair-node-settings",
+      "size": 4174512,
+      "sha256": "4c6dceb4b4eacab1b18c8830a48832dff42e403242ff861a7d37af77a39ab6ce"
+    },
+    {
+      "fileName": "nvpair-proxy",
+      "size": 11039643,
+      "sha256": "f750ea45186a553e379871122f0fad13f36cf2506d799a5618edaef3bb6c5bf2"
+    },
+    {
+      "fileName": "nvpair-tui",
+      "size": 11530220,
+      "sha256": "58a4d6775dc99db1bb2002c9175af497f1aeb3ddf523790939e283b4a9efc15c"
+    },
+    {
+      "fileName": "nvpair-ui-broker",
+      "size": 10292678,
+      "sha256": "831d521fd8de652b9de37fc9616d4d04607162eef3d8bfea613e4b7141cf95c6"
+    },
+    {
+      "fileName": "nvpair-workload-manager",
+      "size": 10229166,
+      "sha256": "db780765b40ce9c1f37432e2e0962713bebbef833367f0ab2782996ec887cb81"
+    }
+  ],
+  "builtAt": "2026-10-16T23:31:50.000Z"
+}

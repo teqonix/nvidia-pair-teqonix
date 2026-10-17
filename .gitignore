@@ -25,3 +25,11 @@ __pycache__/
 
 # Per-machine bookkeeping written by the Cursor agent hooks, not configuration.
 /.cursor/hooks/state/
+
+# Transient deployment scratch from the PAIR 1.0.0 rollout (staged binaries,
+# downloaded engine tarballs). Kept on disk for the running upgrade but never
+# committed. The small manifest.json and the validation scripts under
+# .deploy_tmp/ stay tracked.
+/.deploy_tmp/cli-bin/cli-bin/nvpair-*
+/.deploy_tmp/cli-bin/cli-bin/inference-dispatcher
+/.deploy_tmp/llama-vulkan-b11146.tar.gz
