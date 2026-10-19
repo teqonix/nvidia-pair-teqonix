@@ -41,13 +41,64 @@ TOKEN="${HF_TOKEN:-}"
 #   nemotron lightning     was Q4_K_S-> Q4_K_M
 #   nemotron-3-nano-4b     was Q4_K_M-> ALREADY GGUF on disk, copy not download
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# HUGGING FACE HUB CACHE LAYOUT — REQUIRED, NOT OPTIONAL
+#
+# llama-server discovers models by scanning $LLAMA_CACHE for the HF hub layout:
+#
+#   $LLAMA_CACHE/models--<org>--<repo>/
+#       refs/main                      -> contains the commit hash (no newline)
+#       blobs/<sha256-of-file>         -> the actual bytes
+#       snapshots/<commit>/<filename>  -> symlink -> ../../blobs/<sha256>
+#
+# A flat directory of .gguf files is INVISIBLE to the router: `--cache-list`
+# reports "number of models in cache: 0" and GET /models returns an empty list,
+# even though the files are on disk. (Cost us a long detour.) Model ids are
+# derived from <org>/<repo> plus the quant parsed out of <filename>, so
+# "Qwen3.8-27B-UD-Q4_K_M.gguf" in unsloth/Qwen3.8-27B-GGUF becomes
+# "unsloth/Qwen3.8-27B-GGUF:Q4_K_M".
+#
+# Downloads land in a staging dir and are hardlinked into the hub tree, so the
+# staging copy is free (same volume) and can be deleted without losing anything.
+# ---------------------------------------------------------------------------
+STAGE="$CACHE/.staging"
+
+hub_install() {  # repo  filename  staged_path
+  local repo="$1" file="$2" staged="$3"
+  local d="$CACHE/models--${repo//\//--}"
+  local fhash commit
+  fhash=$(shasum -a 256 "$staged" | cut -d' ' -f1)
+  # Commit hash is synthesised from the blob hash: stable across re-runs so the
+  # snapshot dir is idempotent. We never talk to the hub API for a real SHA.
+  commit=$(printf 'local-%s' "$fhash" | shasum -a 256 | cut -c1-40)
+
+  if [ -e "$d/snapshots/$commit/$file" ]; then
+    log "  hub entry already present: $repo ($file)"
+    return 0
+  fi
+
+  rm -rf "$d"
+  mkdir -p "$d/refs" "$d/blobs" "$d/snapshots/$commit"
+  # Hardlink the bytes in, then symlink the snapshot entry per hub convention.
+  ln "$staged" "$d/blobs/$fhash" 2>/dev/null || cp "$staged" "$d/blobs/$fhash"
+  ln -s "../../blobs/$fhash" "$d/snapshots/$commit/$file"
+  printf '%s' "$commit" > "$d/refs/main"
+  log "  hub entry built: $d -> ${repo}"
+}
+
 download() {  # repo  filename  local_alias
   local repo="$1" file="$2" alias="${3:-}"
-  local dest="$CACHE"
-  [ -n "$alias" ] && dest="$CACHE/$alias"
+  local dest="$STAGE${alias:+/$alias}"
   mkdir -p "$dest"
   local out="$dest/$(basename "$file")"
-  if [ -f "$out" ]; then log "  already present: $(basename "$out")"; return 0; fi
+
+  # Already installed into the hub? Nothing to do.
+  if [ -d "$CACHE/models--${repo//\//--}/snapshots" ] \
+     && find "$CACHE/models--${repo//\//--}/snapshots" -name "$(basename "$file")" -print -quit 2>/dev/null | grep -q .; then
+    log "  already provisioned: $repo/$file"
+    return 0
+  fi
+
   local url="https://huggingface.co/${repo}/resolve/main/${file}"
   log "  GET ${repo}/${file}"
   local auth=()
@@ -57,6 +108,7 @@ download() {  # repo  filename  local_alias
   # array with "${arr[@]}" under `set -u` dies with "unbound variable".
   if curl -L --fail --retry 5 --retry-delay 5 -C - ${auth[@]+"${auth[@]}"} -o "$out" "$url"; then
     log "  OK  $(du -h "$out" | cut -f1)  -> $out"
+    hub_install "$repo" "$(basename "$file")" "$out"
   else
     err "  FAILED: $url  (check repo name / token / disk)"
     rm -f "$out"
@@ -108,12 +160,15 @@ download "ggml-org/gpt-oss-120b-GGUF" "gpt-oss-120b-MXFP4.gguf" "gpt-oss-120b" |
 
 log "6/7 reuse the one real GGUF already on disk (nemotron-3-nano-4b)"
 SRC_GGUF="/Users/teqonix/.lmstudio/models/lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf"
+NANO_STAGED="$STAGE/nemotron-3-nano-4b/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf"
 if [ -r "$SRC_GGUF" ]; then
-  mkdir -p "$CACHE/nemotron-3-nano-4b"
-  if [ ! -f "$CACHE/nemotron-3-nano-4b/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf" ]; then
+  mkdir -p "$STAGE/nemotron-3-nano-4b"
+  if [ ! -f "$NANO_STAGED" ]; then
     log "  copying (may take a while)..."
-    cp "$SRC_GGUF" "$CACHE/nemotron-3-nano-4b/" && log "  OK" || { warn "copy failed"; FAIL=1; }
+    cp "$SRC_GGUF" "$NANO_STAGED" && log "  OK" || { warn "copy failed"; FAIL=1; }
   fi
+  [ -f "$NANO_STAGED" ] && hub_install "lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF" \
+    "NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf" "$NANO_STAGED" || FAIL=1
 else
   log "  source not readable; downloading instead"
   download "lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF" \
@@ -129,10 +184,12 @@ else
 fi
 
 echo
+log "hub cache (what llama-server sees):"
+LLAMA_CACHE="$CACHE" ls -d "$CACHE"/models--*/ 2>/dev/null | sed 's/^/  /' || warn "no models-- dirs found"
 log "cache contents:"
-find "$CACHE" -name '*.gguf' -exec du -h {} \; 2>/dev/null | sort -k2 | sed 's/^/  /'
+find "$CACHE"/models--*/snapshots -type l 2>/dev/null | sed 's/^/  /'
 echo
-log "total: $(du -sh "$CACHE" 2>/dev/null | cut -f1)"
+log "total (staging shares blocks with hub, so count once): $(du -sh "$CACHE" 2>/dev/null | cut -f1)"
 echo
 [ "$FAIL" = 0 ] && log "provisioning complete" || warn "one or more downloads failed - see above"
 

@@ -33,3 +33,4 @@ __pycache__/
 /.deploy_tmp/cli-bin/cli-bin/nvpair-*
 /.deploy_tmp/cli-bin/cli-bin/inference-dispatcher
 /.deploy_tmp/llama-vulkan-b11146.tar.gz
+/desktop/tools/inference-dispatcher
