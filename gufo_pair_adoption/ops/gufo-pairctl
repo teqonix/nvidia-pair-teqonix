@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 teqonix
+# SPDX-License-Identifier: Apache-2.0
+#
+# gufo-pairctl — host-side control surface for the GUFO⇄PAIR masquerade.
+#
+# PAIR's manifest references this file for the llamacpp engine's
+# start / stop / destroy hooks (runtime.mode = "command"), so these commands
+# run ON THE HOST, as the user PAIR runs as, with no TTY. Every subcommand is
+# written to be non-interactive and idempotent.
+#
+# Contract imposed by nvpair-engine-manager:
+#   start  must bring the shim up and BLOCK until /props reports role=router.
+#          PAIR waits on runtime.ready (180s) anyway, but a crisp failure
+#          beats a 3-minute timeout.
+#   stop   must take the daemon down. Non-zero exit is tolerated only if the
+#          service actually went away (PAIR re-probes before complaining).
+#   destroy must remove pods + shim state. MUST NEVER touch model weights.
+#
+# Config: /etc/gufo-pair/env (sourced, KEY=value, mode 0600).
+# No jq dependency — PAIR's environment is not guaranteed to have it.
+
+set -euo pipefail
+
+POD_NAME="${GUFO_PAIR_POD:-gufo-pair}"
+ENV_FILE="${GUFO_PAIR_ENV:-/etc/gufo-pair/env}"
+SHIM_HOST="${SHIM_BIND:-127.0.0.1}"
+SHIM_PORT="${SHIM_PORT:-8081}"
+READY_TIMEOUT="${GUFO_READY_TIMEOUT:-180}"
+COMPOSE_FILE="${GUFO_PAIR_COMPOSE:-/opt/gufo-pair/compose.yaml}"
+STATE_PATH="${SHIM_STATE_PATH:-/var/lib/gufo-masquerade/state.json}"
+
+log() { printf 'gufo-pairctl: %s\n' "$*" >&2; }
+die() { printf 'gufo-pairctl: ERROR: %s\n' "$*" >&2; exit 1; }
+
+# shellcheck disable=SC1090
+load_env() {
+  if [[ -r "$ENV_FILE" ]]; then
+    set -a; . "$ENV_FILE"; set +a
+  else
+    log "warning: config file $ENV_FILE not readable; using defaults"
+  fi
+}
+
+podman_cmd() {
+  command -v podman >/dev/null 2>&1 || die "podman not found on PATH"
+  podman "$@"
+}
+
+props_url()  { printf 'http://%s:%s/props' "$SHIM_HOST" "$SHIM_PORT"; }
+health_url() { printf 'http://%s:%s/health' "$SHIM_HOST" "$SHIM_PORT"; }
+
+# Role check without jq: look for the literal pair in the /props body.
+props_is_router() {
+  local body
+  body="$(curl -fsS --max-time 5 "$(props_url)" 2>/dev/null)" || return 1
+  printf '%s' "$body" | grep -q '"role"[[:space:]]*:[[:space:]]*"router"'
+}
+
+pod_exists() { podman pod exists "$POD_NAME" 2>/dev/null; }
+
+pod_running() {
+  local st
+  st="$(podman pod inspect -f '{{.State}}' "$POD_NAME" 2>/dev/null || true)"
+  [[ "$st" == "Running" ]]
+}
+
+cmd_start() {
+  load_env
+  if pod_running; then
+    log "pod $POD_NAME already running"
+  elif pod_exists; then
+    log "starting existing pod $POD_NAME"
+    podman pod start "$POD_NAME" >/dev/null
+  else
+    [[ -f "$COMPOSE_FILE" ]] || die "no pod and no compose file at $COMPOSE_FILE"
+    log "creating pod from $COMPOSE_FILE"
+    podman pod create --name "$POD_NAME" --network host >/dev/null 2>&1 || true
+    POD="$POD_NAME" podman compose -f "$COMPOSE_FILE" up -d >/dev/null 2>&1 \
+      || podman-compose -f "$COMPOSE_FILE" up -d >/dev/null 2>&1 \
+      || die "could not bring up $COMPOSE_FILE"
+  fi
+
+  log "waiting up to ${READY_TIMEOUT}s for $(props_url) to report role=router"
+  local deadline=$(( SECONDS + READY_TIMEOUT ))
+  while (( SECONDS < deadline )); do
+    if props_is_router; then
+      log "ready: shim reports role=router"
+      return 0
+    fi
+    sleep 2
+  done
+  log "shim never became ready; last pod state: $(podman pod inspect -f '{{.State}}' "$POD_NAME" 2>/dev/null || echo '<none>')"
+  die "timeout waiting for shim readiness"
+}
+
+cmd_stop() {
+  load_env
+  if ! pod_exists; then
+    log "no pod $POD_NAME; nothing to stop"
+    return 0
+  fi
+  if ! pod_running; then
+    log "pod $POD_NAME already stopped"
+    return 0
+  fi
+  log "stopping pod $POD_NAME (GUFO drains in-flight work on SIGTERM)"
+  podman pod stop -t 20 "$POD_NAME" >/dev/null
+  log "stopped"
+}
+
+cmd_status() {
+  load_env
+  local st="absent"
+  pod_exists && st="$(podman pod inspect -f '{{.State}}' "$POD_NAME" 2>/dev/null || echo unknown)"
+  printf 'pod %-12s %s\n' "$POD_NAME" "$st"
+  if curl -fsS --max-time 5 "$(health_url)" >/dev/null 2>&1; then
+    printf 'shim /health   ok\n'
+  else
+    printf 'shim /health   FAIL\n'
+  fi
+  if props_is_router; then
+    printf 'shim /props    role=router\n'
+  else
+    printf 'shim /props    not a router (or unreachable)\n'
+  fi
+  printf 'state file     %s\n' "$STATE_PATH"
+}
+
+# destroy: remove the pods and the shim's deleted-model overlay.
+# Deliberately does NOT touch models_dir — weights belong to the user.
+cmd_destroy() {
+  load_env
+  if pod_exists; then
+    log "removing pod $POD_NAME"
+    podman pod stop -t 15 "$POD_NAME" >/dev/null 2>&1 || true
+    podman pod rm -f "$POD_NAME" >/dev/null 2>&1 || true
+  else
+    log "no pod $POD_NAME to remove"
+  fi
+  if [[ -e "$STATE_PATH" ]]; then
+    log "removing shim state $STATE_PATH"
+    rm -f "$STATE_PATH"
+  fi
+  log "destroyed (model weights under models_dir left untouched)"
+}
+
+cmd_logs() {
+  load_env
+  pod_exists || die "no pod $POD_NAME"
+  podman pod logs -f "$POD_NAME"
+}
+
+main() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    start)   cmd_start "$@" ;;
+    stop)    cmd_stop "$@" ;;
+    status)  cmd_status "$@" ;;
+    destroy) cmd_destroy "$@" ;;
+    logs)    cmd_logs "$@" ;;
+    ""|-h|--help|help)
+      cat >&2 <<'USAGE'
+usage: gufo-pairctl {start|stop|status|destroy|logs}
+
+  start    bring up the GUFO pod and wait for the shim to report role=router
+  stop     stop the GUFO pod (in-flight work drains on SIGTERM)
+  status   show pod state, /health, /props role, state-file path
+  destroy  remove pod + shim state; model weights are never touched
+  logs     follow pod logs
+
+config: /etc/gufo-pair/env  (KEY=value, mode 0600)
+USAGE
+      [[ -z "$sub" ]] && exit 1 || exit 0
+      ;;
+    *) die "unknown subcommand: $sub" ;;
+  esac
+}
+
+main "$@"

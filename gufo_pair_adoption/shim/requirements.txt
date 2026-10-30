@@ -1,0 +1,6 @@
+# Runtime deps for gufo-masquerade. sse-starlette is intentionally absent:
+# the shim streams with StreamingResponse directly and does not use the
+# sse-starlette helper (fewer deps, and no dependency on its event framing).
+fastapi==0.162.0
+httpx==0.28.1
+uvicorn==0.54.0

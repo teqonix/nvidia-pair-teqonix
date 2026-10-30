@@ -1,0 +1,116 @@
+{
+  "$schema": "../manifest.schema.json",
+  "engine": "llamacpp",
+  "display_name": "GUFO (llama.cpp-compatible)",
+  "manifest_version": 1,
+
+  "models_dir": "~/.llamacpp",
+
+  "install": {
+    "mode": "user"
+  },
+
+  "platforms": {
+    "linux/amd64": {
+      "detect": ["/usr/local/bin/gufo-pairctl"],
+
+      "install": {
+        "mode": "user",
+        "artifacts": [],
+        "run": []
+      },
+
+      "uninstall": {
+        "run": ["/usr/local/bin/gufo-pairctl", "destroy"]
+      },
+
+      "runtime": {
+        "mode": "command",
+        "port": 8081,
+        "bind": "127.0.0.1",
+        "cli": "/usr/local/bin/gufo-pairctl",
+
+        "bin": null,
+        "args": null,
+        "env": null,
+        "editable_launch": null,
+
+        "start": [
+          ["{cli}", "start"]
+        ],
+        "stop": {
+          "cmd": ["{cli}", "stop"],
+          "grace_s": 25
+        },
+
+        "ready": {
+          "http": "http://127.0.0.1:{port}/props",
+          "status": 200,
+          "timeout_s": 180,
+          "json_match": { "field": "role", "value": "router" }
+        },
+
+        "health": {
+          "http": "http://127.0.0.1:{port}/health",
+          "status": 200,
+          "interval_s": 10
+        }
+      }
+    }
+  },
+
+  "actions": {
+    "list_models": {
+      "description": "List models served by GUFO through the masquerade shim.",
+      "http": { "method": "GET", "path": "/models" },
+      "result": { "array": "data", "field": "id" }
+    },
+
+    "loaded_models": {
+      "description": "List models resident in memory (shim synthesises status.value; GUFO emits none).",
+      "http": { "method": "GET", "path": "/models" },
+      "result": {
+        "array": "data",
+        "field": "id",
+        "match": { "field": "status.value", "in": ["loaded"] }
+      }
+    },
+
+    "pull_model": {
+      "description": "Provision a model. GUFO compiles its model graph and loads weights at process start and cannot download over HTTP: the shim acks immediately for a model GUFO already serves, else returns 501 with instructions. To change the served model: stage weights, then `gufo-pairctl restart`. Set SHIM_PULL_POLICY=fake for a simulated download when testing the UI.",
+      "http": {
+        "method": "POST",
+        "path": "/models",
+        "body_schema": { "model": "string" }
+      },
+      "progress_protocol": "llamacpp-models-sse"
+    },
+
+    "load_model": {
+      "description": "Load a model into memory. GUFO pre-loads its single model at startup, so this is an idempotent ack for a resident model and 404 for anything else.",
+      "http": {
+        "method": "POST",
+        "path": "/models/load",
+        "body_schema": { "model": "string" }
+      }
+    },
+
+    "unload_model": {
+      "description": "Unload a model. Cancelling an in-flight pull succeeds. Unloading the actively-served model returns 409 rather than falsely claiming eviction, because GUFO cannot evict at runtime; stop the pod to unload. SHIM_REFUSE_UNLOAD_SERVING=0 makes it a documented no-op ack.",
+      "http": {
+        "method": "POST",
+        "path": "/models/unload",
+        "body_schema": { "model": "string" }
+      }
+    },
+
+    "delete_model": {
+      "description": "Remove a model from the shim's advertised inventory. Weights on disk are untouched (GUFO has no delete primitive); the model simply stops being listed and routed, and the deletion survives shim restarts.",
+      "http": {
+        "method": "DELETE",
+        "path": "/models",
+        "params_in": "query"
+      }
+    }
+  }
+}

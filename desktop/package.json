@@ -125,5 +125,11 @@
     },
     "overrides": {
         "dompurify": "^3.4.13"
+    },
+    "allowScripts": {
+        "@nvidia/foundations-react-core": true,
+        "electron-winstaller@5.4.0": true,
+        "fsevents@2.3.3": true,
+        "esbuild": true
     }
 }

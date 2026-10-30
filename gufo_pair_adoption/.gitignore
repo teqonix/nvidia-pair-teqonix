@@ -1,0 +1,16 @@
+# Local-only artefacts for the GUFO/PAIR masquerade stack.
+# The staging venv and the Go verification harness (a writable copy of upstream
+# services/) live outside this dir in practice, but guard them here too so a
+# careless `cp -r` never lands them in the repo.
+.venv/
+manifest_check/
+.gocache/
+.gomodcache/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Runtime state / logs (SHIM_STATE_PATH default lives in a volume, not here)
+state.json
+*.log

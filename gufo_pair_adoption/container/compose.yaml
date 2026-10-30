@@ -1,0 +1,101 @@
+# compose.yaml — GUFO + masquerade shim, one pod, host network.
+#
+# Topology (see PLAN.md §2):
+#   - net = host, so the shim's 127.0.0.1:8081 bind IS the address PAIR
+#     probes. A bridge network would require PAIR to probe a pod IP it does
+#     not know.
+#   - GUFO listens on 127.0.0.1:8901 only. Host port 8080 is deliberately left
+#     free: PAIR's own proxy facade owns it, and with network_mode:host a
+#     loopback bind IS the host loopback, so 8080 would collide.
+#   - The shim holds GUFO_API_KEY and injects it upstream, so PAIR never
+#     needs credentials.
+#
+# Bring up with:  gufo-pairctl start
+# (podman compose wraps docker-compose; POD env var selects the pod.)
+
+name: gufo-pair
+
+services:
+  gufo:
+    image: ${GUFO_IMAGE:-localhost/gufo:latest}
+    container_name: gufo-core
+    network_mode: host
+    # ROCm / Strix Halo (gfx1151). Rootless podman needs the user in the
+    # render + video groups AND keep-groups so the device cgroup follows
+    # supplementary groups instead of being replaced.
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - keep-groups
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: "${HSA_OVERRIDE_GFX_VERSION:-11.5.1}"
+    volumes:
+      - ${GUFO_MODELS_DIR:-/srv/models/gufo}:/models:ro
+    # --api-key makes GUFO require auth; the shim is the only client.
+    # --served-model-name keeps the advertised id stable across weight swaps.
+    command:
+      - serve
+      - llm
+      - --model
+      - /models/${GUFO_MODEL_FILE:-model.gguf}
+      - --served-model-name
+      - ${SERVED_MODEL_NAME:-gufo-local}
+      - --host
+      - "127.0.0.1"
+      - --port
+      - "8901"
+      - --api-key
+      - ${GUFO_API_KEY:?GUFO_API_KEY must be set in /etc/gufo-pair/env}
+      # Context MUST be set explicitly. --context 0 means "native context from
+      # model metadata", which for Qwen3.8 Flash-Next is 262144 tokens *per
+      # session*. GUFO admits by reserving the full configured capacity up
+      # front, and KV state grows with it -- at native width this can blow past
+      # the box. The qualified benchmark number (88.78 GiB peak) was measured at
+      # context capacity 133121, not at native width.
+      - --context
+      - "${GUFO_CONTEXT:-32768}"
+      - --sessions
+      - "${GUFO_SESSIONS:-1}"
+    restart: unless-stopped
+    # GUFO has no HTTP health endpoint that is key-free on /health in every
+    # build, so we probe TCP reachability on loopback instead.
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(0 if s.connect_ex(('127.0.0.1',8901))==0 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 90s
+
+  shim:
+    image: ${SHIM_IMAGE:-localhost/gufo-masquerade:1.0.0}
+    container_name: gufo-pair-shim
+    network_mode: host
+    depends_on:
+      gufo:
+        condition: service_started
+    environment:
+      # Loopback only. A 0.0.0.0 bind here would expose an unauthenticated
+      # OpenAI-compatible proxy with GUFO_API_KEY injected to the whole LAN.
+      # deploy_stack.sh gates on this string being present in the staged file,
+      # so it must be the literal default, not a runtime-chosen value.
+      SHIM_HOST: "${SHIM_BIND:-127.0.0.1}"
+      SHIM_PORT: "${SHIM_PORT:-8081}"
+      GUFO_BASE_URL: "http://127.0.0.1:8901"
+      GUFO_API_KEY: ${GUFO_API_KEY:?GUFO_API_KEY must be set in /etc/gufo-pair/env}
+      SHIM_STATE_PATH: /var/lib/gufo-masquerade/state.json
+      SHIM_LOG_LEVEL: ${SHIM_LOG_LEVEL:-info}
+      SHIM_ACCESS_LOG: ${SHIM_ACCESS_LOG:-0}
+      SHIM_REFUSE_UNLOAD_SERVING: ${SHIM_REFUSE_UNLOAD_SERVING:-1}
+      SHIM_PULL_POLICY: ${SHIM_PULL_POLICY:-present-ok}
+    volumes:
+      # Persistent overlay so a shim restart does not resurrect deleted
+      # models. Without this, deletions reset on every restart.
+      - gufo_pair_shim_state:/var/lib/gufo-masquerade
+    restart: unless-stopped
+
+volumes:
+  gufo_pair_shim_state:
+    name: gufo_pair_shim_state

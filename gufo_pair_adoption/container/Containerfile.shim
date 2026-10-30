@@ -1,0 +1,68 @@
+# syntax=docker/dockerfile:1
+# Containerfile for the gufo-masquerade shim.
+#
+# Builds a small, non-root image that serves PAIR's llama.cpp-router control
+# plane on 8081 and reverse-proxies inference to GUFO.
+#
+# Build (from this directory):
+#   podman build -f Containerfile.shim -t localhost/gufo-masquerade:1.0.0 ..
+#
+# Note the build context is the ASSET ROOT, not shim/, so the shim source and
+# requirements.txt both come from one context and the COPY paths stay honest.
+
+# ---------------------------------------------------------------------------
+# deps: resolve and install wheels in a throwaway layer
+# ---------------------------------------------------------------------------
+FROM docker.io/library/python:3.13-slim AS deps
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+COPY shim/requirements.txt /build/requirements.txt
+RUN python -m pip install --prefix=/install -r /build/requirements.txt
+
+# ---------------------------------------------------------------------------
+# runtime: no compiler, no pip metadata, no shell utilities beyond coreutils
+# ---------------------------------------------------------------------------
+FROM docker.io/library/python:3.13-slim AS runtime
+
+LABEL org.opencontainers.image.title="gufo-masquerade" \
+      org.opencontainers.image.description="Present GUFO as a llama.cpp router to nVidia PAIR" \
+      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+# Nobody in this container needs root. UID/GID 65532 (nobody) keeps the image
+# rootless-friendly and means a container escape lands on an unprivileged uid.
+RUN groupadd --gid 65532 shimuser 2>/dev/null || true; \
+    useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin shimuser 2>/dev/null || true
+
+COPY --from=deps /install /usr/local
+COPY shim/gufo_masquerade_shim.py /opt/shim/gufo_masquerade_shim.py
+
+# The shim persists its deleted-model overlay here. Mount a volume over it or
+# deletions reset on every container restart.
+RUN mkdir -p /var/lib/gufo-masquerade && chown 65532:65532 /var/lib/gufo-masquerade
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    SHIM_HOST=0.0.0.0 \
+    SHIM_PORT=8081 \
+    GUFO_BASE_URL=http://127.0.0.1:8901 \
+    SHIM_STATE_PATH=/var/lib/gufo-masquerade/state.json \
+    SHIM_LOG_LEVEL=info
+
+USER 65532:65532
+
+# 8081 is PAIR's reserved llamacpp port. Inside the pod we bind 0.0.0.0 so
+# the pod's published port mapping reaches us; host-level exposure is
+# restricted to loopback by the pod mapping, not by this bind.
+EXPOSE 8081
+
+# Healthcheck mirrors PAIR's own probe target so `podman ps` and PAIR agree on
+# whether this thing is up. Uses the stdlib rather than curl so no extra pkgs.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=4 \
+  CMD python -c "import os,sys,urllib.request as u; \
+sys.exit(0 if u.urlopen(f'http://127.0.0.1:{os.environ[\"SHIM_PORT\"]}/health', timeout=4).status==200 else 1)"
+
+ENTRYPOINT ["python", "/opt/shim/gufo_masquerade_shim.py"]

@@ -1,0 +1,50 @@
+{
+  "engine": "llamacpp",
+  "display_name": "GUFO 3_empty_obj",
+  "manifest_version": 1,
+  "models_dir": "~/.llamacpp",
+  "platforms": {
+    "linux/amd64": {
+      "detect": [
+        "/usr/local/bin/gufo-pairctl"
+      ],
+      "install": {
+        "mode": "user",
+        "artifacts": [],
+        "run": []
+      },
+      "runtime": {
+        "mode": "command",
+        "port": 8081,
+        "bind": "127.0.0.1",
+        "cli": "/usr/local/bin/gufo-pairctl",
+        "start": [
+          [
+            "{cli}",
+            "start"
+          ]
+        ],
+        "stop": {
+          "cmd": [
+            "{cli}",
+            "stop"
+          ],
+          "grace_s": 25
+        },
+        "ready": {
+          "http": "http://127.0.0.1:{port}/props",
+          "status": 200,
+          "json_match": {
+            "field": "role",
+            "value": "router"
+          }
+        },
+        "health": {
+          "http": "http://127.0.0.1:{port}/health",
+          "status": 200
+        },
+        "editable_launch": {}
+      }
+    }
+  }
+}
