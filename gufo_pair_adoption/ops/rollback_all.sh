@@ -103,7 +103,7 @@ rssh "sudo -u $RUN_USER GUFO_PAIR_COMPOSE=/opt/gufo-pair/compose.yaml GUFO_PAIR_
   && ok "gufo-pairctl stop issued" || warn "gufo-pairctl stop returned non-zero (may already be down)"
 
 sleep 3
-for p in 8081 8901; do
+for p in 8081 18080; do
   n=$(rssh "ss -tln '( sport = :$p )' 2>/dev/null | tail -n +2 | wc -l")
   [[ "${n:-0}" -eq 0 ]] && ok ":$p released" || warn ":$p still bound"
 done
@@ -161,7 +161,7 @@ printf '  %-12s %s\n' "Halogen" "$(rssh "systemctl is-active $HAL_UNIT 2>/dev/nu
 printf '  %-12s %s\n' "PAIR" "$(rssh 'systemctl is-active nvpair.service 2>/dev/null')"
 printf '  %-12s %s\n' ":8731" "$(rssh "ss -tln '( sport = :8731 )' 2>/dev/null | tail -n +2 | wc -l" | xargs -I{} echo '{} listener(s)')"
 printf '  %-12s %s\n' ":8081" "$(rssh "ss -tln '( sport = :8081 )' 2>/dev/null | tail -n +2 | wc -l" | xargs -I{} echo '{} listener(s)')"
-printf '  %-12s %s\n' ":8901" "$(rssh "ss -tln '( sport = :8901 )' 2>/dev/null | tail -n +2 | wc -l" | xargs -I{} echo '{} listener(s)')"
+printf '  %-12s %s\n' ":18080" "$(rssh "ss -tln '( sport = :18080 )' 2>/dev/null | tail -n +2 | wc -l" | xargs -I{} echo '{} listener(s)')"
 
 hdr "Rollback complete  passed=$PASS warnings=$FAIL"
 say "Next: confirm this conversation still responds. If it does, inference is on Halogen."

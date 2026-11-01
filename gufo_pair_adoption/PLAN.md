@@ -5,6 +5,13 @@
 **Goal:** PAIR drives GUFO through its `llamacpp` (llama.cpp-router) engine slot.
 GUFO stays the real inference engine; a thin shim closes the control-plane gaps.
 **Rollback target:** Halogen Qwen 3.8 Flash Next (`halogen-flash-server-teqonix`).
+**Revision 2 (2026-11-01, bookmark `gufo-shim-update`):** GUFO is now consumed as
+the **vendor-qualified prebuilt image**
+`docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-10.0-gufo` and is brought up by a
+**systemd unit on `amd-ai-core-two.lan`**, not by a hand-built container. All
+tasks about building GUFO from source are **removed** (see §11 resolution note).
+The open work is now three tasks: **T1** systemd service, **T2** smoke test,
+**T3** retarget the shim (§13).
 
 > [!IMPORTANT]
 > This is a **plan + staged artefacts only** deliverable. Nothing here has been
@@ -102,6 +109,15 @@ graph TB
     MODELS[("models volume<br/>~/.llamacpp/models")] --> GUFOC
     STATE[("state volume<br/>shim_state.json")] <--> SHIMC
 ```
+
+> [!NOTE]
+> **Revision 2 supersedes the pod topology for GUFO.** GUFO no longer runs inside
+> a `net=host` pod next to the shim. It runs as a **standalone rootless container**
+> (`gufo-cockpit-server`) on podman's default network, with its port published to
+> **host loopback only** via `-p 127.0.0.1:18080:18080`. The shim still binds
+> `127.0.0.1:8081` and reaches GUFO at `http://127.0.0.1:18080`. Everything in
+> this section describing GUFO at `:8080` inside the pod is retained only as the
+> historical rationale for the shim's bind address; the port map of record is §14.
 
 **Why `net=host`.** PAIR's readiness/health probes are hard-coded against
 `127.0.0.1:{port}` (`runtime.ready.http`, `runtime.health.http`). With a
@@ -502,19 +518,23 @@ Remaining risk before this goes near `amd-ai-core-two.lan`:
 | # | Gap | Why it matters | How to close |
 |---|-----|----------------|--------------|
 | 3 | **`gufo-pairctl` not installed end-to-end** | Manifest references `/usr/local/bin/gufo-pairctl`. Drafted in `ops/` but never run on a real host. | Install on a scratch VM; run all 5 subcommands (`start`/`stop`/`status`/`destroy`/`logs`). |
-| 4 | **GUFO image build with ROCm/gfx1151** | GUFO has **zero** container assets in the repo. Qualified toolchain is GCC 15.3 + ROCm 7.2.3; `ENGINE_ENABLE_HIP=ON`. Strix Halo `gfx1151` needs the ROCr queue-memory patch used by the Nix build. | Build `Containerfile.gufo` (NOT yet written — see §13). Nonstandard ROCm may need `-DCMAKE_PREFIX_PATH=/opt/rocm` and `-DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++`. |
-| 5 | **HIP inside rootless podman** | `/dev/kfd` + `/dev/dri` access under rootless podman needs `--group-add keep-groups` and the user in `render`/`video`. Unproven for gfx1151 here. | Prove with a tiny HIP container before building the GUFO image. |
 | 6 | **PAIR UI-level behaviour** | Contract tests prove the wire format. They don't prove the UI renders progress, handles `409` gracefully, or shows the model where expected. | Manual pass on a dev node with the real UI. |
 | 7 | **Restart / resilience** | `reconcilePresence` only marks adopted services stopped after *repeated* refusals. Timing under shim restart is untested against real PAIR. | Kill shim, restart, confirm PAIR doesn't deregister. |
-| 8 | **Shim against *real* GUFO** | All 33 contract checks ran against a **mock** GUFO. Real GUFO's `/props` shape, `/models` inventory, `/models/sse` framing and `--api-key` auth injection are unverified. | Bring up real GUFO on `:8901`, re-run the contract suite pointed at it. |
-| 9 | **`amd-ai-core-two` image naming** | Cluster logs reference `rocm-10.0` / `llama-rocm-10.0` and GUFO is qualified on **ROCm 7.2.3**. This mismatch is unresolved and could mean the node's userspace/driver combination is incompatible with a 7.2.3-built image. | **Blocking question for the node owner.** Check `rocminfo` / driver version on the node. |
+| 8 | **Shim against *real* GUFO** | All 33 contract checks ran against a **mock** GUFO. Real GUFO's `/props` shape, `/models` inventory, `/models/sse` framing and `--api-key` auth injection are unverified. | Bring real GUFO up via the T1 systemd unit (`:18080`), then re-run the contract suite pointed at it (T3). |
 
-> [!CAUTION]
-> Item **9** is a stop-the-line question. The GUFO README qualifies **ROCm
-> 7.2.3**, while existing core-two images are tagged `rocm-10.0` /
-> `llama-rocm-10.0`. Building a 7.2.3 GUFO image against a 10.0 driver stack
-> without verifying the driver compatibility matrix risks a non-starting
-> container or silent compute failures. Resolve before building.
+> [!NOTE]
+> **Revision 2 — former items 4, 5 and 9 are resolved and removed.** Manual GUFO
+> building is off the table: GUFO is consumed as the vendor-qualified prebuilt
+> image `docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-10.0-gufo`.
+>
+> * *Item 4 (build `Containerfile.gufo`)* — not needed; the vendor image ships
+>   GUFO with the qualified ROCm userspace.
+> * *Item 5 (HIP under rootless podman)* — handled at launch by the T1 unit's
+>   `--device /dev/kfd --device /dev/dri --group-add keep-groups` on the
+>   vendor-validated image, rather than proven against a hand-built one.
+> * *Item 9 (ROCm `7.2.3` vs `rocm-10.0` mismatch)* — answered by the image
+>   tag itself: `rocm-10.0-gufo` is built against the node's `rocm-10.0` stack,
+>   so the stop-the-line question no longer applies.
 
 ---
 
@@ -547,25 +567,184 @@ The lander:
 
 ---
 
-## 13. Recommended execution order (for the deployment phase, later)
+## 13. Task list (revision 2 — current deployment work)
 
-Nothing in this list is authorised yet — it is the sequence for when it is.
+All tasks related to **building GUFO manually** are **removed**: writing
+`Containerfile.gufo`, the GCC 15.3 / `ENGINE_ENABLE_HIP=ON` / `gfx1151` build,
+the ROCr queue-memory patch, and the HIP-in-rootless-podman proof-of-concept.
+GUFO is consumed as the vendor-qualified prebuilt image
+`docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-10.0-gufo` (§11 resolution
+note). What remains is **three tasks**, run in order on `amd-ai-core-two.lan`.
 
-1. **Resolve §11 item 8** (ROCm version mismatch) with the node owner. *Blocking.*
-2. Prove HIP under rootless podman on `amd-ai-core-two` with a throwaway image.
-3. Build `Containerfile.gufo` (GCC 15.3, `ENGINE_ENABLE_HIP=ON`, `gfx1151`,
-   ROCr queue-memory patch). **Not yet written** — deliberately, pending 1–2.
-4. Write + install `gufo-pairctl` and `/etc/gufo-pair/env` on the node.
-5. Stand up the pod **without** PAIR involvement; verify `/props` role,
-   inventory, chat stream incrementality directly against `:8081`.
-6. Validate the manifest override against the real PAIR loader (§11 item 1).
-7. Install the override with backup; restart PAIR's engine manager.
-8. Adopt: confirm PAIR sees the engine **external**, and did **not** download
-   llama.cpp (`~/.llamacpp/llama-server` must not appear).
-9. Manual UI pass: pull / load / unload / delete / inference.
-10. Resilience: restart shim mid-stream, kill GUFO, confirm PAIR reacts honestly.
-11. Rollback rehearsal — run `rollback_halogen.sh`, verify §9 checklist, then
-    flip forward again. **Rehearse before you need it.**
+```mermaid
+flowchart LR
+    T1["T1 · systemd unit<br/>gufo-cockpit-server<br/>boot → podman run"] --> T2["T2 · smoke test<br/>direct inference on<br/>127.0.0.1:18080"]
+    T2 --> T3["T3 · repoint shim<br/>GUFO_BASE_URL<br/>→ :18080, re-verify"]
+    T3 --> P["PAIR llamacpp slot<br/>serves GUFO"]
+```
+
+### T1 — systemd service on `amd-ai-core-two.lan` that starts the GUFO cockpit container on boot
+
+Rootless **user** unit for user `turnstone` (requires `loginctl enable-linger
+turnstone` so it comes up without a login session):
+
+`~/.config/systemd/user/gufo-cockpit-server.service`
+
+```ini
+[Unit]
+Description=GUFO cockpit server (Qwen3.8-Flash-Next UD-Q4_K_XL, prebuilt ROCm 10.0 image)
+After=network-online.target
+Wants=network-online.target
+# StartLimit* MUST live in [Unit], not [Service], under systemd 257.
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+# `-it` dropped: there is no TTY under systemd. Everything else is the
+# operator-supplied `podman run` line, verbatim.
+ExecStart=/usr/bin/podman run --rm \
+  --name gufo-cockpit-server \
+  --device /dev/dri --device /dev/kfd \
+  --group-add keep-groups \
+  --security-opt seccomp=unconfined \
+  --ipc=host \
+  --security-opt label=disable \
+  --userns=keep-id \
+  -p 127.0.0.1:18080:18080 \
+  -v /home/turnstone/models/Qwen3.8-Flash-Next-GGUF-Gufo/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf:/models/target/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf:ro \
+  -v /home/turnstone/models/Qwen3.8-Flash-Next-GGUF-Gufo/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf:/models/target/Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf:ro \
+  -v /home/turnstone/models/Qwen3.8-Flash-Next-GGUF-Gufo/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf:/models/target/Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf:ro \
+  -v /home/turnstone/models/Qwen3.8-Flash-Next-GGUF-Gufo/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf:/models/target/Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf:ro \
+  -v /home/turnstone/models/Qwen3.8-Flash-Next-GGUF-Gufo/MTP:/models/speculation:ro \
+  docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-10.0-gufo \
+  gufo serve --host 0.0.0.0 --port 18080 --sessions 1 llm \
+    --model /models/target/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf \
+    --context 165000 \
+    --max-tokens 64000 \
+    --served-model-name Qwen3.8-Flash-Next-UD-Q4_K_XL \
+    --think on \
+    --reasoning-effort high \
+    --max-pending-per-client 4 \
+    --speculative mtp \
+    --mtp-model /models/speculation/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf \
+    --draft-tokens 7
+# A ~104 GiB GGUF takes minutes to map; never time the start out.
+TimeoutStartSec=infinity
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=40
+
+[Install]
+WantedBy=default.target
+```
+
+Enable it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now gufo-cockpit-server.service
+loginctl enable-linger turnstone      # so default.target is reached at boot
+```
+
+**Unit design notes (each one is a gotcha that was hit before):**
+
+| Choice | Reason |
+|---|---|
+| `-it` **removed** | systemd gives the service no TTY; `-t` fails with *"the input device is not a TTY"*. |
+| `--rm` **kept** | An exited container leaves no corpse, so every restart gets a clean `--name gufo-cockpit-server` claim. |
+| `--host 0.0.0.0` **inside** the container | Required by the vendor image entrypoint pattern; it is **not** exposed because the publish is `-p 127.0.0.1:18080:18080` — GUFO is reachable on **host loopback only**, never on the LAN. |
+| Bind targets keep `-NNNNN-of-NNNNN` | GUFO validates split-GGUF shard filenames against `<name>-NNNNN-of-NNNNN.gguf`; renaming the mount target inside the container **breaks the load**. |
+| `--group-add keep-groups` + `--userns=keep-id` | Carries the rootless user's `render`/`video` group membership through to `/dev/kfd` + `/dev/dri`. |
+| `Restart=on-failure` + `StartLimit*` in `[Unit]` | Under systemd 257 `StartLimit*` is ignored in `[Service]` — it must be in `[Unit]`. |
+
+> [!CAUTION]
+> **Memory coexistence — measured on this node, not theoretical.** GUFO's KFD SVM
+> working set is ~**106 GiB resident** (103.7 GiB model + 2.6 GiB MTP) on a
+> **125 GiB** host, and `halogen-flash-server.service` already pins ~**35 GiB**
+> of GTT. GUFO therefore **cannot load while Halogen is resident** — the load
+> fails ~7 s in with `device allocation failed for blk.10.ffn_gate_exps.weight`
+> and `dmesg` reports `SVM mapping failed, exceeds resident system memory limit`.
+> Halogen must be stopped **before** GUFO starts. That is a **cutover decision
+> for the node owner**, so this unit deliberately does **not** declare
+> `Conflicts=halogen-flash-server.service` — an unattended boot must not
+> silently take the rollback target down. Make the ordering explicit once the
+> cutover is approved.
+
+### T2 — Smoke test inference on the GUFO server
+
+Direct against the container — **bypasses the shim**, so it isolates GUFO from any
+masquerade bugs.
+
+```bash
+GU=http://127.0.0.1:18080
+
+# 1. Liveness + served-model identity
+curl -sf $GU/v1/models | python3 -m json.tool | grep Qwen3.8-Flash-Next-UD-Q4_K_XL
+
+# 2. Synchronous chat completion
+curl -sf $GU/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "Qwen3.8-Flash-Next-UD-Q4_K_XL",
+  "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+  "max_tokens": 16
+}' | python3 -m json.tool
+
+# 3. Streaming — must arrive in MANY chunks, not one buffered blob
+curl -sN $GU/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "Qwen3.8-Flash-Next-UD-Q4_K_XL",
+  "messages": [{"role": "user", "content": "Count from 1 to 30."}],
+  "stream": true, "max_tokens": 256
+}' | tee /tmp/gufo_stream.txt | grep -c '^data:'
+
+# 4. Think mode + MTP speculation are actually live
+curl -sf $GU/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "Qwen3.8-Flash-Next-UD-Q4_K_XL",
+  "messages": [{"role": "user", "content": "What is 17*23? Think first."}],
+  "max_tokens": 256, "thinking": "enabled"
+}' | python3 -c 'import json,sys; d=json.load(sys.stdin); m=d["choices"][0]["message"]; print("reasoning:", bool(m.get("reasoning_content") or m.get("reasoning"))); print("content:", m.get("content"))'
+journalctl --user -u gufo-cockpit-server.service -b --no-pager \
+  | grep -iE 'speculat|mtp|draft.*accept' | tail -20
+
+# 5. No memory/allocation failures during the load
+dmesg -T 2>/dev/null | grep -iE 'SVM mapping failed|out of memory|OOM' | tail -5 || true
+```
+
+**Pass criteria — all must hold:**
+
+- [ ] `/v1/models` lists `Qwen3.8-Flash-Next-UD-Q4_K_XL` (exact served name)
+- [ ] Synchronous completion returns non-empty `content`
+- [ ] Stream yields **many** `data:` lines (chunked, not a single buffered blob)
+- [ ] `reasoning_content` present with `--think on`
+- [ ] MTP draft acceptance **> 0** in the journal — proves speculation is live, not silently disabled
+- [ ] No `SVM mapping failed` / OOM in `dmesg`
+- [ ] Unit stays `active (running)` across a 10-minute soak
+
+### T3 — Update the PAIR shim to hit the GUFO server
+
+Retarget the masquerade shim so PAIR's `llamacpp` engine slot proxies to
+`gufo-cockpit-server` instead of the old in-pod GUFO.
+
+1. **Base URL:** `GUFO_BASE_URL=http://127.0.0.1:18080` (was `127.0.0.1:8901`)
+   — update in the shim default, `ops/env.sample`, and the live shim env.
+2. **Model identity:** the shim's synthesised `/v1/models` rows must surface
+   `Qwen3.8-Flash-Next-UD-Q4_K_XL` **exactly** as GUFO serves it — T2 step 1 is
+   the source of truth, not a hard-coded string.
+3. **Re-run the contract suite against *real* GUFO** (closes §11 item 8), not
+   just the mock: `shim/tests/run_contract_checks.py` with `GUFO_BASE_URL` aimed
+   at `:18080`. Expect the G1/G6 injections (`role=router`, `status.value`) to
+   still be what makes PAIR see anything.
+4. **PAIR-side checks through the shim:** `/props` → `role=router`, `/health` 200,
+   model list, and an incremental chat stream shim → GUFO.
+5. **Honesty check:** `systemctl --user stop gufo-cockpit-server` and confirm the
+   shim reports `/health` as **502/503** — PAIR must mark the engine down rather
+   than trusting a stale "ready".
+
+**Pass criteria:**
+
+- [ ] Contract checks pass against real GUFO on `:18080`
+- [ ] PAIR probe accepts the engine (`role=router` on `:8081`)
+- [ ] Chat through the PAIR façade (`:8080`) streams incrementally end-to-end
+- [ ] Stopping the GUFO unit makes the shim report unhealthy within one probe interval
 
 ---
 
@@ -604,26 +783,33 @@ Nothing in this list is authorised yet — it is the sequence for when it is.
     └── E_{1..4}_*.json            editable_launch probe variants (negative cases)
 ```
 
-**Deliberately absent:** `Containerfile.gufo` — blocked on §11 items 4, 5 and 9.
-Writing it now would encode unverified ROCm assumptions into the repo.
+**Deliberately absent:** `Containerfile.gufo` — **no longer a deliverable**
+(revision 2). GUFO is consumed as the vendor-qualified prebuilt image
+`docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-10.0-gufo`. The T1 systemd unit
+(`gufo-cockpit-server.service`) is the GUFO launch artefact of record; there is
+no hand-built GUFO container to write.
 
 **Deliberately excluded from landing:** `manifest_check/` (20 MB) — a writable
 copy of upstream PAIR's `nvpair-engine-manager` package plus `empair` binary,
 used only to run the tests now preserved in `verification/`. The harness is
 rebuildable; the upstream code is not ours to land.
 
-### Port map (final, no collisions)
+### Port map (revision 2 — no collisions)
 
 | Component | Address | Owner / note |
 |---|---|---|
 | PAIR proxy façade | host `:8080` | PAIR's own — we must **not** bind it |
 | Shim (llamacpp slot) | `127.0.0.1:8081` | what PAIR probes; matches manifest `runtime.port` |
-| GUFO | `127.0.0.1:8901` | internal only; chosen to avoid PAIR's `8080` |
+| GUFO cockpit server | `127.0.0.1:18080` | T1 unit; published to **host loopback only** via `-p 127.0.0.1:18080:18080` |
 | Halogen (rollback target) | `:8731` | systemd `halogen-flash-server.service`, independent |
 
 > [!IMPORTANT]
-> With `network_mode: host` there is no pod-local network namespace — a loopback
-> bind inside the container **is** the host loopback. GUFO's own default port is
-> `8080` (`src/cli/serve/serve.cpp`), which would collide with PAIR's façade, so
-> GUFO is explicitly started with `--port 8901`. Shim default, compose and
-> `env.sample` all agree on `8901`.
+> **Revision 2 port change: GUFO moved `8901` → `18080`.** The GUFO cockpit
+> server runs as a standalone rootless container on podman's default network
+> with its port published to host loopback (`-p 127.0.0.1:18080:18080`), so
+> GUFO's in-container `--host 0.0.0.0` never reaches the LAN — only loopback
+> clients on the host can reach it. The shim reaches GUFO at
+> `127.0.0.1:18080` (T3). GUFO's own default port is `8080`
+> (`src/cli/serve/serve.cpp`), which would collide with PAIR's façade, so it is
+> explicitly overridden to `18080` in the T1 unit. Shim default,
+> `ops/env.sample`, and `container/compose.yaml` all move to `18080` in T3.

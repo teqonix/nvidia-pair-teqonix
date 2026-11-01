@@ -19,8 +19,24 @@
 #
 # Config: /etc/gufo-pair/env (sourced, KEY=value, mode 0600).
 # No jq dependency — PAIR's environment is not guaranteed to have it.
+#
+# Revision 2 topology (PLAN.md §13/§14): GUFO is NO LONGER a container inside a
+# net=host pod owned by this script. It is the standalone rootless container
+# `gufo-cockpit-server`, launched by its own systemd *user* unit and published
+# to host loopback only on :18080. This script supervises only the SHIM (also a
+# systemd user unit) and merely waits on GUFO's port. It must NEVER start a
+# second GUFO: on a 125 GiB box already resident-ing the 111 GiB UD-Q4_K_XL
+# set, a duplicate GUFO is an instant OOM, not a slow start. The legacy
+# compose/pod path below is retained only as the revision-1 fallback and runs
+# only when no shim unit is installed.
 
 set -euo pipefail
+
+# --- revision-2 service names ----------------------------------------------
+SHIM_SERVICE="${GUFO_SHIM_SERVICE:-gufo-masquerade-shim}"
+GUFO_SERVICE="${GUFO_COCKPIT_SERVICE:-gufo-cockpit-server}"
+SHIM_SCRIPT="${GUFO_SHIM_SCRIPT:-/usr/local/lib/gufo-masquerade/gufo_masquerade_shim.py}"
+GUFO_PROBE_URL="${GUFO_PROBE_URL:-http://127.0.0.1:18080/health}"
 
 POD_NAME="${GUFO_PAIR_POD:-gufo-pair}"
 ENV_FILE="${GUFO_PAIR_ENV:-/etc/gufo-pair/env}"
@@ -50,11 +66,40 @@ podman_cmd() {
 props_url()  { printf 'http://%s:%s/props' "$SHIM_HOST" "$SHIM_PORT"; }
 health_url() { printf 'http://%s:%s/health' "$SHIM_HOST" "$SHIM_PORT"; }
 
-# Role check without jq: look for the literal pair in the /props body.
-props_is_router() {
-  local body
-  body="$(curl -fsS --max-time 5 "$(props_url)" 2>/dev/null)" || return 1
-  printf '%s' "$body" | grep -q '"role"[[:space:]]*:[[:space:]]*"router"'
+# --- revision-2 helpers ------------------------------------------------------
+# True when the shim is managed by systemd (the revision-2 install path).
+shim_unit_installed() {
+  systemctl --user cat "$SHIM_SERVICE.service" >/dev/null 2>&1
+}
+
+gufo_unit_installed() {
+  systemctl --user cat "$GUFO_SERVICE.service" >/dev/null 2>&1
+}
+
+# GUFO is reached over loopback; we only need it answering, not owned by us.
+gufo_reachable() {
+  curl -fsS --max-time 5 "$GUFO_PROBE_URL" >/dev/null 2>&1
+}
+
+# Nudge GUFO's own unit awake if it is installed but stopped, then wait for it.
+# Deliberately does NOT create or reconfigure GUFO — that unit belongs to T1.
+ensure_gufo_up() {
+  if gufo_reachable; then
+    log "GUFO reachable at $GUFO_PROBE_URL"
+    return 0
+  fi
+  if gufo_unit_installed; then
+    log "GUFO not answering; starting user unit $GUFO_SERVICE"
+    systemctl --user start "$GUFO_SERVICE" || true
+  else
+    log "warning: no $GUFO_SERVICE unit and GUFO not reachable at $GUFO_PROBE_URL"
+  fi
+  local deadline=$(( SECONDS + READY_TIMEOUT ))
+  while (( SECONDS < deadline )); do
+    gufo_reachable && { log "GUFO up"; return 0; }
+    sleep 2
+  done
+  return 1
 }
 
 pod_exists() { podman pod exists "$POD_NAME" 2>/dev/null; }
@@ -65,16 +110,58 @@ pod_running() {
   [[ "$st" == "Running" ]]
 }
 
+# Our /props carries a "masquerade" block that a real llama.cpp server never
+# emits. Requiring it stops readiness from being satisfied by a stale
+# llama-server (which also answers role=router) squatting on the port.
+props_is_router() {
+  local body
+  body="$(curl -fsS --max-time 5 "$(props_url)" 2>/dev/null)" || return 1
+  printf '%s' "$body" | grep -q '"role"[[:space:]]*:[[:space:]]*"router"' &&
+    printf '%s' "$body" | grep -q '"masquerade"'
+}
+
+# If a non-shim process holds the port (e.g. PAIR's own llama-server from
+# before the cutover), clear it so the shim can bind. Only ever signals
+# llama-server processes on this port — never an unknown listener.
+clear_stale_port_holder() {
+  local pids pid exe
+  props_is_router && return 0                     # already our shim
+  pids="$(ss -tlnp "sport = :$SHIM_PORT" 2>/dev/null \
+          | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)" || true
+  [[ -z "$pids" ]] && return 0
+  for pid in $pids; do
+    exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+    case "$exe" in
+      */llama-server)
+        log "stale llama-server pid $pid holds :$SHIM_PORT — terminating"
+        kill "$pid" 2>/dev/null || true ;;
+      *)
+        die "unknown process '$exe' (pid $pid) holds :$SHIM_PORT; refusing to kill it" ;;
+    esac
+  done
+  for _ in 1 2 3 4 5; do
+    ss -tln "sport = :$SHIM_PORT" 2>/dev/null | tail -n +2 | grep -q . || break
+    sleep 1
+  done
+}
+
 cmd_start() {
   load_env
-  if pod_running; then
+  if shim_unit_installed; then
+    # --- revision 2: GUFO is external; we supervise only the shim ---
+    ensure_gufo_up || die "GUFO never became reachable at $GUFO_PROBE_URL"
+    clear_stale_port_holder
+    log "starting shim unit $SHIM_SERVICE"
+    systemctl --user start "$SHIM_SERVICE"
+  elif pod_running; then
+    # --- revision-1 fallback: pod owns GUFO + shim ---
     log "pod $POD_NAME already running"
   elif pod_exists; then
     log "starting existing pod $POD_NAME"
     podman pod start "$POD_NAME" >/dev/null
   else
-    [[ -f "$COMPOSE_FILE" ]] || die "no pod and no compose file at $COMPOSE_FILE"
-    log "creating pod from $COMPOSE_FILE"
+    [[ -f "$COMPOSE_FILE" ]] || die "no shim unit, no pod, and no compose file at $COMPOSE_FILE"
+    log "creating pod from $COMPOSE_FILE (revision-1 fallback)"
     podman pod create --name "$POD_NAME" --network host >/dev/null 2>&1 || true
     POD="$POD_NAME" podman compose -f "$COMPOSE_FILE" up -d >/dev/null 2>&1 \
       || podman-compose -f "$COMPOSE_FILE" up -d >/dev/null 2>&1 \
@@ -90,14 +177,27 @@ cmd_start() {
     fi
     sleep 2
   done
-  log "shim never became ready; last pod state: $(podman pod inspect -f '{{.State}}' "$POD_NAME" 2>/dev/null || echo '<none>')"
+  if shim_unit_installed; then
+    log "shim never became ready; unit state: $(systemctl --user show "$SHIM_SERVICE" -p ActiveState -p SubState --value 2>/dev/null || echo '<unknown>')"
+    journalctl --user -u "$SHIM_SERVICE" -n 20 --no-pager 2>/dev/null | sed 's/^/  | /' >&2 || true
+  else
+    log "shim never became ready; last pod state: $(podman pod inspect -f '{{.State}}' "$POD_NAME" 2>/dev/null || echo '<none>')"
+  fi
   die "timeout waiting for shim readiness"
 }
 
 cmd_stop() {
   load_env
+  if shim_unit_installed; then
+    # Revision 2: stop ONLY the shim. GUFO belongs to its own unit; tearing
+    # the router down must never evict 111 GiB of weights underneath anyone.
+    log "stopping shim unit $SHIM_SERVICE (GUFO unit left alone)"
+    systemctl --user stop "$SHIM_SERVICE" || true
+    log "stopped"
+    return 0
+  fi
   if ! pod_exists; then
-    log "no pod $POD_NAME; nothing to stop"
+    log "no shim unit and no pod $POD_NAME; nothing to stop"
     return 0
   fi
   if ! pod_running; then
@@ -111,19 +211,25 @@ cmd_stop() {
 
 cmd_status() {
   load_env
-  local st="absent"
-  pod_exists && st="$(podman pod inspect -f '{{.State}}' "$POD_NAME" 2>/dev/null || echo unknown)"
-  printf 'pod %-12s %s\n' "$POD_NAME" "$st"
+  if shim_unit_installed; then
+    printf 'shim unit      %s\n' "$(systemctl --user show "$SHIM_SERVICE" -p ActiveState -p SubState --value 2>/dev/null | paste -sd/ - || echo unknown)"
+    printf 'gufo unit      %s\n' "$(systemctl --user show "$GUFO_SERVICE" -p ActiveState -p SubState --value 2>/dev/null | paste -sd/ - || echo unknown)"
+  else
+    local st="absent"
+    pod_exists && st="$(podman pod inspect -f '{{.State}}' "$POD_NAME" 2>/dev/null || echo unknown)"
+    printf 'pod %-12s %s\n' "$POD_NAME" "$st"
+  fi
   if curl -fsS --max-time 5 "$(health_url)" >/dev/null 2>&1; then
     printf 'shim /health   ok\n'
   else
     printf 'shim /health   FAIL\n'
   fi
   if props_is_router; then
-    printf 'shim /props    role=router\n'
+    printf 'shim /props    role=router (masquerade confirmed)\n'
   else
-    printf 'shim /props    not a router (or unreachable)\n'
+    printf 'shim /props    not the GUFO masquerade router (absent or foreign)\n'
   fi
+  printf 'upstream       %s\n' "${GUFO_BASE_URL:-$GUFO_PROBE_URL}"
   printf 'state file     %s\n' "$STATE_PATH"
 }
 
@@ -131,7 +237,13 @@ cmd_status() {
 # Deliberately does NOT touch models_dir — weights belong to the user.
 cmd_destroy() {
   load_env
-  if pod_exists; then
+  if shim_unit_installed; then
+    # Revision 2: stop + disable the shim unit; remove its overlay state.
+    # The GUFO unit, its container, and the weights are NOT touched.
+    log "stopping and disabling shim unit $SHIM_SERVICE"
+    systemctl --user stop "$SHIM_SERVICE" 2>/dev/null || true
+    systemctl --user disable "$SHIM_SERVICE" 2>/dev/null || true
+  elif pod_exists; then
     log "removing pod $POD_NAME"
     podman pod stop -t 15 "$POD_NAME" >/dev/null 2>&1 || true
     podman pod rm -f "$POD_NAME" >/dev/null 2>&1 || true

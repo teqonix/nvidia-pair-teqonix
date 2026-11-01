@@ -36,7 +36,7 @@ MOCK = os.path.join(HERE, "mock_gufo.py")
 MOCK_PORT = int(os.environ.get("CONTRACT_MOCK_PORT", "18901"))
 GUFO_URL = f"http://127.0.0.1:{MOCK_PORT}"
 API_KEY = "test-key-123"
-MODEL_ID = "gufo/nemotron-3.5-lightning-optiq"
+MODEL_ID = "Qwen3.8-Flash-Next-UD-Q4_K_XL"
 
 #: PAIR's bundled llamacpp.json readiness probe, verbatim.
 PAIR_READY = {

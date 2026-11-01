@@ -62,7 +62,7 @@ usage: deploy_stack.sh [--host HOST] (--stage-only | --start)
   --start        stage, then start the GUFO pod + shim (Halogen left running)
 
   env overrides: GUFO_MODELS_DIR, GUFO_MODEL_FILE, SERVED_MODEL_NAME
-                 SHIM_PORT (8081), GUFO_PORT (8901)
+                 SHIM_PORT (8081), GUFO_PORT (18080)
 
 Nothing here stops Halogen. Use cutover_halogen.sh for that.
 USAGE
@@ -139,7 +139,7 @@ rssh "sudo tee $ENV_PATH >/dev/null <<EOF
 GUFO_API_KEY=$NEWKEY
 SHIM_BIND=127.0.0.1
 SHIM_PORT=8081
-GUFO_BASE_URL=http://127.0.0.1:8901
+GUFO_BASE_URL=http://127.0.0.1:18080
 POD_NAME=gufo-pair
 GUFO_PAIR_POD=gufo-pair
 GUFO_PAIR_COMPOSE=$REMOTE_ROOT/compose.yaml

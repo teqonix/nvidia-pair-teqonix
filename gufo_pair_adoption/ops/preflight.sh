@@ -87,17 +87,17 @@ REND=$(rssh 'test -c /dev/dri/renderD128 && echo yes')
 [[ -n "$REND" ]] && ok "/dev/dri/renderD128 present" || bad "/dev/dri/renderD128 missing"
 
 # ---------------------------------------------------------------- 2. port map
-hdr "2. Port map (8080 façade / 8081 shim / 8901 GUFO / 8731 Halogen)"
-for p in 8080 8081 8901 8731; do
+hdr "2. Port map (8080 façade / 8081 shim / 18080 GUFO / 8731 Halogen)"
+for p in 8080 8081 18080 8731; do
   owner=$(rssh "ss -tlnp 2>/dev/null | awk -v p=':$p' '\$4 ~ p\"$\" {print \$0}' | head -1")
   case "$p" in
-    8081|8901)
+    8081|18080)
       [[ -z "$owner" ]] && ok "$p free (required)" \
         || bad "$p BUSY but required free -> ${owner}"
       ;;
     8080)
       [[ -n "$owner" ]] && ok "$p held by PAIR façade (expected)" \
-        || warn "$p not bound — is PAIR down? GUFO must still use 8901, not 8080"
+        || warn "$p not bound — is PAIR down? GUFO is now the cockpit unit on 18080"
       ;;
     8731)
       [[ -n "$owner" ]] && ok "$p Halogen live (expected; becomes fallback)" \

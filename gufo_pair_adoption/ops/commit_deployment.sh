@@ -186,7 +186,7 @@ MARKER="committed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 engine=gufo-masquerade
 pair_manifest=llamacpp.json
 shim=127.0.0.1:8081
-gufo=127.0.0.1:8901
+gufo=127.0.0.1:18080
 halogen=masked"
 if [[ $DRY_RUN -eq 0 ]]; then
   rssh "sudo mkdir -p /etc/gufo-pair && sudo tee $COMMITTED_FLAG >/dev/null" <<<"$MARKER" 2>/dev/null \

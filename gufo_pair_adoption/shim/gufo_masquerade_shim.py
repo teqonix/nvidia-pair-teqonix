@@ -119,7 +119,7 @@ class Config:
     listen_port: int = field(default_factory=lambda: _env_int("SHIM_PORT", 8081))
     gufo_base_url: str = field(
         default_factory=lambda: os.environ.get(
-            "GUFO_BASE_URL", "http://127.0.0.1:8901"
+            "GUFO_BASE_URL", "http://127.0.0.1:18080"
         ).rstrip("/")
     )
     gufo_api_key: str = field(default_factory=lambda: os.environ.get("GUFO_API_KEY", ""))

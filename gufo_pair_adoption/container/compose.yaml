@@ -4,7 +4,7 @@
 #   - net = host, so the shim's 127.0.0.1:8081 bind IS the address PAIR
 #     probes. A bridge network would require PAIR to probe a pod IP it does
 #     not know.
-#   - GUFO listens on 127.0.0.1:8901 only. Host port 8080 is deliberately left
+#   - GUFO listens on 127.0.0.1:18080 only (the cockpit container). Host port 8080 is deliberately left
 #     free: PAIR's own proxy facade owns it, and with network_mode:host a
 #     loopback bind IS the host loopback, so 8080 would collide.
 #   - The shim holds GUFO_API_KEY and injects it upstream, so PAIR never
@@ -46,7 +46,7 @@ services:
       - --host
       - "127.0.0.1"
       - --port
-      - "8901"
+      - "18080"
       - --api-key
       - ${GUFO_API_KEY:?GUFO_API_KEY must be set in /etc/gufo-pair/env}
       # Context MUST be set explicitly. --context 0 means "native context from
@@ -63,7 +63,7 @@ services:
     # GUFO has no HTTP health endpoint that is key-free on /health in every
     # build, so we probe TCP reachability on loopback instead.
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(0 if s.connect_ex(('127.0.0.1',8901))==0 else 1)\""]
+      test: ["CMD-SHELL", "python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(0 if s.connect_ex(('127.0.0.1',18080))==0 else 1)\""]
       interval: 15s
       timeout: 5s
       retries: 4
@@ -83,7 +83,7 @@ services:
       # so it must be the literal default, not a runtime-chosen value.
       SHIM_HOST: "${SHIM_BIND:-127.0.0.1}"
       SHIM_PORT: "${SHIM_PORT:-8081}"
-      GUFO_BASE_URL: "http://127.0.0.1:8901"
+      GUFO_BASE_URL: "http://127.0.0.1:18080"
       GUFO_API_KEY: ${GUFO_API_KEY:?GUFO_API_KEY must be set in /etc/gufo-pair/env}
       SHIM_STATE_PATH: /var/lib/gufo-masquerade/state.json
       SHIM_LOG_LEVEL: ${SHIM_LOG_LEVEL:-info}

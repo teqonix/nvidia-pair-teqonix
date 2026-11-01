@@ -28,7 +28,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 API_KEY = os.environ.get("MOCK_GUFO_API_KEY", "test-key-123")
-MODEL_ID = os.environ.get("MOCK_GUFO_MODEL", "gufo/nemotron-3.5-lightning-optiq")
+MODEL_ID = os.environ.get("MOCK_GUFO_MODEL", "Qwen3.8-Flash-Next-UD-Q4_K_XL")
 PORT = int(os.environ.get("MOCK_GUFO_PORT", "18901"))
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)

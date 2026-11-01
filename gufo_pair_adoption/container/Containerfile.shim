@@ -46,9 +46,9 @@ RUN mkdir -p /var/lib/gufo-masquerade && chown 65532:65532 /var/lib/gufo-masquer
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    SHIM_HOST=0.0.0.0 \
+    SHIM_HOST=127.0.0.1 \
     SHIM_PORT=8081 \
-    GUFO_BASE_URL=http://127.0.0.1:8901 \
+    GUFO_BASE_URL=http://127.0.0.1:18080 \
     SHIM_STATE_PATH=/var/lib/gufo-masquerade/state.json \
     SHIM_LOG_LEVEL=info
 
