@@ -755,7 +755,8 @@ Retarget the masquerade shim so PAIR's `llamacpp` engine slot proxies to
 ├── PLAN.md                        this plan
 ├── lander.sh                      stage → /workspace + jj capture
 ├── shim/
-│   ├── gufo_masquerade_shim.py    the shim (env-configured)
+│   ├── gufo_masquerade/            the shim package (config/inventory/sse/app/__main__)
+│   ├── gufo_masquerade_shim.py     thin launcher (systemd/pairctl/container path)
 │   └── requirements.txt           fastapi 0.162.0 / httpx 0.28.1 / uvicorn 0.54.0
 │                                (sse-starlette deliberately absent — StreamingResponse used)
 ├── shim/tests/
@@ -763,7 +764,15 @@ Retarget the masquerade shim so PAIR's `llamacpp` engine slot proxies to
 │   ├── pair_semantics.py          PAIR client-side decoders, ported from Go
 │   ├── contract_checks.py         CHECKS list — runner-agnostic, single source of truth
 │   ├── run_contract_checks.py     standalone runner (pytest is SIGSYS on this node)
-│   └── test_pair_contract.py      pytest wrapper generated from CHECKS
+│   ├── test_pair_contract.py      pytest wrapper generated from CHECKS
+│   ├── unit_support.py            fake GUFO (MockTransport), in-proc uvicorn, env builder
+│   ├── test_config.py             unit: environment parsing / Config
+│   ├── test_inventory.py          unit: virtual inventory + overlay persistence
+│   ├── test_sse_hub.py            unit: progress hub + backpressure
+│   ├── test_app.py                unit: routes, policies, relay, SSE over real sockets
+│   ├── test_entrypoints.py        unit: launcher subprocess, main(), owned-client lifecycle
+│   └── run_unit_tests.py          standalone unittest runner + coverage driver
+├── SHIM_DOCS.md                    architecture, PAIR semantics, verification guide
 ├── manifest/
 │   └── llamacpp.json              PAIR override, platform-scoped to linux/amd64
 ├── container/

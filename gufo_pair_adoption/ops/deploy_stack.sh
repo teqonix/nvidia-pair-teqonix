@@ -96,6 +96,8 @@ hdr "2. Copying artifacts"
 rscp "$REPO_DIR/container/compose.yaml" "$HOST:$REMOTE_ROOT/compose.yaml" || { err "compose copy failed"; exit 1; }
 rscp "$REPO_DIR/container/Containerfile.shim" "$HOST:$REMOTE_ROOT/Containerfile.shim" || true
 rscp "$REPO_DIR/shim/gufo_masquerade_shim.py" "$HOST:$REMOTE_ROOT/" || { err "shim copy failed"; exit 1; }
+# The implementation package sits beside the launcher; both are needed.
+rscp -r "$REPO_DIR/shim/gufo_masquerade" "$HOST:$REMOTE_ROOT/" || { err "shim package copy failed"; exit 1; }
 rscp "$REPO_DIR/shim/requirements.txt" "$HOST:$REMOTE_ROOT/" || true
 rscp "$REPO_DIR/ops/gufo-pairctl" "$HOST:$REMOTE_ROOT/gufo-pairctl" || { err "ctl copy failed"; exit 1; }
 rssh "sudo install -m 0755 $REMOTE_ROOT/gufo-pairctl /usr/local/bin/gufo-pairctl" \

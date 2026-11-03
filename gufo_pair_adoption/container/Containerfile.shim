@@ -5,10 +5,14 @@
 # plane on 8081 and reverse-proxies inference to GUFO.
 #
 # Build (from this directory):
-#   podman build -f Containerfile.shim -t localhost/gufo-masquerade:1.0.0 ..
+#   podman build -f Containerfile.shim -t localhost/gufo-masquerade:1.1.0 ..
 #
 # Note the build context is the ASSET ROOT, not shim/, so the shim source and
 # requirements.txt both come from one context and the COPY paths stay honest.
+#
+# Layout note: the implementation is the `gufo_masquerade` package; the
+# top-level gufo_masquerade_shim.py is a thin launcher that keeps systemd
+# ExecStart / pairctl SHIM_SCRIPT paths stable. Both must be copied.
 
 # ---------------------------------------------------------------------------
 # deps: resolve and install wheels in a throwaway layer
@@ -29,7 +33,7 @@ FROM docker.io/library/python:3.13-slim AS runtime
 
 LABEL org.opencontainers.image.title="gufo-masquerade" \
       org.opencontainers.image.description="Present GUFO as a llama.cpp router to nVidia PAIR" \
-      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.version="1.1.0" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 # Nobody in this container needs root. UID/GID 65532 (nobody) keeps the image
@@ -39,6 +43,7 @@ RUN groupadd --gid 65532 shimuser 2>/dev/null || true; \
 
 COPY --from=deps /install /usr/local
 COPY shim/gufo_masquerade_shim.py /opt/shim/gufo_masquerade_shim.py
+COPY shim/gufo_masquerade/ /opt/shim/gufo_masquerade/
 
 # The shim persists its deleted-model overlay here. Mount a volume over it or
 # deletions reset on every container restart.
@@ -65,4 +70,6 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=4 \
   CMD python -c "import os,sys,urllib.request as u; \
 sys.exit(0 if u.urlopen(f'http://127.0.0.1:{os.environ[\"SHIM_PORT\"]}/health', timeout=4).status==200 else 1)"
 
+# The launcher adds /opt/shim to sys.path itself, so the package resolves no
+# matter what cwd systemd/podman pick.
 ENTRYPOINT ["python", "/opt/shim/gufo_masquerade_shim.py"]

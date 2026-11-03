@@ -14,3 +14,8 @@ __pycache__/
 # Runtime state / logs (SHIM_STATE_PATH default lives in a volume, not here)
 state.json
 *.log
+
+# Coverage output
+.coverage
+.coverage.*
+htmlcov/
