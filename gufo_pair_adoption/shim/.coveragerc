@@ -1,0 +1,16 @@
+# Coverage configuration for the shim unit suite. Run from shim/:
+#
+#   .venv/bin/coverage run tests/run_unit_tests.py
+#   .venv/bin/coverage report -m
+#
+# The target is the gufo_masquerade package; the top-level
+# gufo_masquerade_shim.py launcher is behaviour-tested as a subprocess by
+# test_entrypoints.py (separate process, cannot be instrumented in-process).
+
+[run]
+source = gufo_masquerade
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
